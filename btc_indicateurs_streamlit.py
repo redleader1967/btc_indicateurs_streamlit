@@ -7,6 +7,11 @@ import datetime
 st.set_page_config(page_title="Tendance & Valorisation", page_icon="📊", layout="wide")
 st.title("📊 Tableau de bord Tendance & Valorisation")
 
+# 🔄 Bouton pour forcer la mise à jour
+if st.button("🔄 Forcer la mise à jour des données"):
+    st.cache_data.clear()
+    st.experimental_rerun()
+
 # 🔑 API Key
 API_KEY = st.secrets["polygon_api_key"]
 
