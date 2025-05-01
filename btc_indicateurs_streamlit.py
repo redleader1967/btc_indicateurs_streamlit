@@ -12,11 +12,10 @@ assets = {
     'Bitcoin': 'X:BTCUSD',
     'S&P 500 (SPY ETF)': 'SPY',
     'Nasdaq 100': 'I:NDX',
-    'Or': 'XAUUSD',  # On utilisera CoinGecko ici
+    'Or': 'XAUUSD',
     'Ethereum': 'X:ETHUSD'
 }
 
-# ====== Fear & Greed Index ======
 def get_fear_and_greed():
     try:
         url = "https://api.alternative.me/fng/?limit=1&format=json"
@@ -28,7 +27,6 @@ def get_fear_and_greed():
         pass
     return "Indisponible"
 
-# ====== Données Polygon.io ======
 @st.cache_data(ttl=3600)
 def get_polygon_data(ticker):
     if ticker == 'XAUUSD':
@@ -45,7 +43,6 @@ def get_polygon_data(ticker):
             return df
     return pd.DataFrame()
 
-# ====== Prix de l’or via CoinGecko ======
 def get_gold_price():
     url = "https://api.coingecko.com/api/v3/simple/price?ids=tether-gold&vs_currencies=usd"
     response = requests.get(url)
@@ -56,7 +53,6 @@ def get_gold_price():
         return df
     return pd.DataFrame()
 
-# ====== STREAMLIT APP ======
 st.title("📊 Tableau de bord Tendance & Valorisation")
 
 fear_and_greed = get_fear_and_greed()
@@ -82,33 +78,20 @@ for name, ticker in assets.items():
     df_1mo = df[df.index <= (df.index[-1] - pd.Timedelta(days=30))]
     close_month = df_1mo['Close'].iloc[-1] if not df_1mo.empty else None
 
-    # Tendance
-    if pd.notna(ma200_now) and close_now:
-        tendance_bool = close_now > ma200_now
-        trend = 'Haussière ✅' if tendance_bool else 'Baissière ❌'
-        if tendance_bool:
-            haussiers += 1
-    else:
-        trend = 'Pas assez de données'
+    tendance_bool = close_now > ma200_now if pd.notna(ma200_now) else False
+    trend = 'Haussière ✅' if tendance_bool else 'Baissière ❌'
+    if tendance_bool:
+        haussiers += 1
 
-    # Croisement MA50/MA200
-    if pd.notna(ma50_now) and pd.notna(ma200_now):
-        cross = 'Golden Cross ✅' if ma50_now > ma200_now else 'Death Cross ❌'
-    else:
-        cross = 'N/A'
+    cross = 'Golden Cross ✅' if ma50_now > ma200_now else 'Death Cross ❌'
 
-    # Évolution 1 mois
     if close_month:
         evolution_pct = round((close_now - close_month) / close_month * 100, 2)
         change = f"+{evolution_pct}% 📈" if evolution_pct > 0 else f"{evolution_pct}% 📉"
     else:
         change = "Pas de données"
 
-    # Recommandation
-    if tendance_bool and close_month and evolution_pct > 0:
-        recommandation = "Renforcer 🟢"
-    else:
-        recommandation = "Attendre ⚪"
+    recommandation = "Renforcer 🟢" if tendance_bool and close_month and evolution_pct > 0 else "Attendre ⚪"
 
     if name == 'Bitcoin' and isinstance(fear_and_greed, int):
         if fear_and_greed > 75:
@@ -126,8 +109,25 @@ for name, ticker in assets.items():
 
 df_results = pd.DataFrame(results)
 
-# ====== Affichage adapté mobile ======
-st.dataframe(df_results, use_container_width=True)
+# ===== Affichage =====
+
+st.markdown("## 🔍 Affichage")
+mode = st.radio("Choisis ton mode d'affichage :", ["Tableau classique (PC)", "Cartes (Mobile)"])
+
+if mode == "Tableau classique (PC)":
+    st.dataframe(df_results, use_container_width=True)
+else:
+    for index, row in df_results.iterrows():
+        st.markdown("---")
+        st.markdown(f"### {row['Actif']}")
+        st.markdown(f"**Prix actuel** : {row['Prix actuel']}")
+        st.markdown(f"**Tendance** : {row['Tendance']}")
+        st.markdown(f"**Croisement** : {row['Croisement MA50/MA200']}")
+        st.markdown(f"**Évolution 1 mois** : {row['Évolution 1 mois']}")
+        st.markdown(f"**Action suggérée** : {row['Action suggérée']}")
+        st.markdown(f"*Date des données* : {row['Date des données']}")
+
+# ===== Résumé =====
 
 st.markdown(f"**Fear & Greed Index (Bitcoin)** : {fear_and_greed}/100")
 st.markdown(f"**Actifs en tendance haussière** : {haussiers} sur {len(assets)}")
