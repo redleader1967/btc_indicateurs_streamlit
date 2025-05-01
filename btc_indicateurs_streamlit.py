@@ -1,108 +1,146 @@
 import streamlit as st
-import pandas as pd
 from polygon import RESTClient
 from datetime import datetime, timedelta
+import pandas as pd
+import numpy as np
 
-# ----------- CONFIG ----------- #
+# ---------- CONFIGURATION ----------
 st.set_page_config(
     page_title="Tableau de bord Tendance & Valorisation",
     page_icon="📊",
-    layout="wide"
+    layout="centered"
 )
 
-# API Key
 API_KEY = st.secrets["polygon_api_key"]
 client = RESTClient(API_KEY)
 
-# Tickers à surveiller
+# ---------- FONCTIONS ----------
+
+@st.cache_data(ttl=3600)
+def get_polygon_data(ticker):
+    try:
+        end_date = datetime.today()
+        start_date = end_date - timedelta(days=90)  # 3 mois
+
+        aggs = client.get_aggs(
+            ticker, 1, "day", start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d")
+        )
+        data = pd.DataFrame(aggs)
+        if not data.empty:
+            data["date"] = pd.to_datetime(data["timestamp"], unit="ms")
+            data.sort_values("date", inplace=True)
+            return data
+        else:
+            return None
+    except Exception as e:
+        st.warning(f"Erreur pour {ticker} : {e}")
+        return None
+
+def analyze_data(df):
+    close_price = df["close"].iloc[-1]
+    ma50 = df["close"].rolling(window=50).mean().iloc[-1]
+    ma200 = df["close"].rolling(window=200).mean().iloc[-1] if len(df) >= 200 else np.nan
+
+    trend = "Haussière" if close_price > ma200 else "Baissière"
+    cross = "Golden Cross ✅" if ma50 > ma200 else "Death Cross ❌"
+
+    perf = (close_price / df["close"].iloc[-21] - 1) * 100 if len(df) > 21 else np.nan
+    action = "Renforcer" if trend == "Haussière" else "Attendre"
+
+    last_date = df["date"].max().strftime("%Y-%m-%d")
+    return close_price, trend, cross, perf, action, last_date
+
+# ---------- LISTE DES ACTIFS ----------
 assets = {
     "Bitcoin": "X:BTCUSD",
-    "S&P 500 (SPY ETF)": "SPY",
-    "Nasdaq 100": "QQQ",
-    "Or": "XAU/USD",
+    "S&P 500 (SPY ETF)": "X:SPY",
+    "Nasdaq 100": "X:QQQ",
+    "Or": "X:GCUSD",
     "Ethereum": "X:ETHUSD"
 }
 
-# ----------- FONCTIONS ----------- #
-@st.cache_data(ttl=3600)
-def get_polygon_data(ticker):
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=90)
-    try:
-        aggs = client.get_aggs(ticker, 1, "day", start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
-        df = pd.DataFrame(aggs)
-        df['date'] = pd.to_datetime(df['timestamp'], unit='ms')
-        df = df.sort_values('date')
-        return df
-    except Exception as e:
-        return pd.DataFrame(), str(e)
-
-def analyze_data(df):
-    if df.empty:
-        return "Erreur", "Erreur", "None", "None", "None"
-    close = df['close'].iloc[-1]
-    ma50 = df['close'].rolling(window=50).mean().iloc[-1]
-    ma200 = df['close'].rolling(window=200).mean().iloc[-1]
-    trend = "Haussière ✅" if close > ma200 else "Baissière ❌"
-    cross = "Golden Cross ✅" if ma50 > ma200 else "Death Cross ❌"
-    perf = ((close - df['close'].iloc[-22]) / df['close'].iloc[-22]) * 100 if len(df) > 22 else "N/A"
-    action = "Renforcer 🟢" if trend == "Haussière ✅" else "Attendre ⚪️"
-    return round(close, 2), trend, cross, f"{perf:.2f} %" if perf != "N/A" else "N/A", action
-
-# ----------- UI ----------- #
+# ---------- TITRE ----------
 st.title("📊 Tableau de bord Tendance & Valorisation")
 
-if st.button("🔄 Forcer la mise à jour des données"):
+# ---------- BOUTONS ----------
+col1, col2 = st.columns(2)
+with col1:
+    force_update = st.button("🔄 Forcer la mise à jour des données")
+with col2:
+    refresh = st.button("♻️ Actualiser les données")
+
+if force_update:
     st.cache_data.clear()
 
-affichage = st.radio("Affichage :", ["Tableau (PC)", "Cartes (Mobile)"])
+# ---------- AFFICHAGE MODE ----------
+mode = st.radio("Affichage :", ["Tableau (PC)", "Cartes (Mobile)"])
 
-# ----------- ANALYSE ----------- #
+# ---------- TRAITEMENT DES DONNÉES ----------
 results = []
-max_date = datetime(2000,1,1)
+dates = {}
 
 for name, ticker in assets.items():
     df = get_polygon_data(ticker)
-    if df is not None and not df.empty:
-        close, trend, cross, perf, action = analyze_data(df)
-        last_date = df['date'].max()
-        max_date = max(max_date, last_date)
+
+    if df is not None:
+        if not df.empty:
+            close, trend, cross, perf, action, last_date = analyze_data(df)
+            results.append({
+                "Actif": name,
+                "Prix actuel": f"{close:,.2f}",
+                "Tendance": trend,
+                "Croisement MA50/MA200": cross,
+                "Évolution 1 mois": f"{perf:.2f} %",
+                "Action suggérée": action
+            })
+            dates[name] = last_date
+        else:
+            results.append({
+                "Actif": name,
+                "Prix actuel": "Erreur",
+                "Tendance": "Erreur",
+                "Croisement MA50/MA200": "Erreur",
+                "Évolution 1 mois": "Erreur",
+                "Action suggérée": "Erreur"
+            })
+            dates[name] = "Données vides"
     else:
-        close, trend, cross, perf, action = "Erreur", "Erreur", "None", "None", "None"
-        last_date = "Aucune donnée"
-    results.append({
-        "Actif": name,
-        "Prix actuel": close,
-        "Tendance": trend,
-        "Croisement MA50/MA200": cross,
-        "Évolution 1 mois": perf,
-        "Action suggérée": action,
-        "Dernière date": last_date
-    })
+        results.append({
+            "Actif": name,
+            "Prix actuel": "Erreur",
+            "Tendance": "Erreur",
+            "Croisement MA50/MA200": "Erreur",
+            "Évolution 1 mois": "Erreur",
+            "Action suggérée": "Erreur"
+        })
+        dates[name] = "Erreur de récupération"
 
-df_final = pd.DataFrame(results)
+df_result = pd.DataFrame(results)
 
-# ----------- AFFICHAGE ----------- #
-st.divider()
+# ---------- AFFICHAGE ----------
+st.subheader("📋 Données actuelles")
 
-if affichage == "Tableau (PC)":
-    st.dataframe(df_final.drop(columns=["Dernière date"]), use_container_width=True)
+if mode == "Tableau (PC)":
+    st.dataframe(df_result, use_container_width=True)
 else:
-    for i, row in df_final.iterrows():
-        st.subheader(f"📌 {row['Actif']}")
-        st.write(f"**Prix actuel :** {row['Prix actuel']}")
-        st.write(f"**Tendance :** {row['Tendance']}")
-        st.write(f"**Croisement MA50/MA200 :** {row['Croisement MA50/MA200']}")
-        st.write(f"**Évolution 1 mois :** {row['Évolution 1 mois']}")
-        st.write(f"**Action suggérée :** {row['Action suggérée']}")
-        st.divider()
+    for i, row in df_result.iterrows():
+        st.markdown(
+            f"""
+            ### {row['Actif']}
+            **Prix actuel** : {row['Prix actuel']}  
+            **Tendance** : {row['Tendance']}  
+            **Croisement** : {row['Croisement MA50/MA200']}  
+            **Évolution 1 mois** : {row['Évolution 1 mois']}  
+            **Action suggérée** : {row['Action suggérée']}
+            ---
+            """
+        )
 
-# ----------- ALERTE DONNÉES TROP VIEILLES ----------- #
-if max_date < datetime.now() - timedelta(days=2):
-    st.error(f"⚠ Les données sont anciennes (dernière date : {max_date.date()}). Vérifie ton quota Polygon ou patiente.")
+# ---------- DATES DES DONNÉES ----------
+st.markdown("🕒 **Données les plus récentes par actif :**")
+for asset, date in dates.items():
+    st.write(f"- {asset} : {date}")
 
-else:
-    st.success(f"✅ Données mises à jour au : {max_date.date()}")
-
+# ---------- FOOTER ----------
 st.markdown("---")
-st.markdown("Développé par **redleader1967 🚀**")
+st.markdown("Développé par redleader1967 🚀")
