@@ -77,6 +77,7 @@ for name, ticker in assets.items():
     close_now = df['Close'].iloc[-1]
     ma200_now = df['MA200'].iloc[-1]
     ma50_now = df['MA50'].iloc[-1]
+    date_now = df.index[-1].strftime("%Y-%m-%d")
 
     df_1mo = df[df.index <= (df.index[-1] - pd.Timedelta(days=30))]
     close_month = df_1mo['Close'].iloc[-1] if not df_1mo.empty else None
@@ -119,11 +120,14 @@ for name, ticker in assets.items():
         'Tendance': trend,
         'Croisement MA50/MA200': cross,
         'Évolution 1 mois': change,
-        'Action suggérée': recommandation
+        'Action suggérée': recommandation,
+        'Date des données': date_now
     })
 
 df_results = pd.DataFrame(results)
-st.dataframe(df_results)
+
+# ====== Affichage adapté mobile ======
+st.dataframe(df_results, use_container_width=True)
 
 st.markdown(f"**Fear & Greed Index (Bitcoin)** : {fear_and_greed}/100")
 st.markdown(f"**Actifs en tendance haussière** : {haussiers} sur {len(assets)}")
