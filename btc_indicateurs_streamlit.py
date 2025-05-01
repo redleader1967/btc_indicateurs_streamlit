@@ -1,8 +1,9 @@
 import streamlit as st
-from polygon import RESTClient
-from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
+import yfinance as yf
+import requests
+from datetime import datetime, timedelta
 
 # ---------- CONFIGURATION ----------
 st.set_page_config(
@@ -11,58 +12,71 @@ st.set_page_config(
     layout="centered"
 )
 
-API_KEY = st.secrets["polygon_api_key"]
-client = RESTClient(API_KEY)
+# ---------- LISTE DES ACTIFS ----------
+assets_yfinance = {
+    "S&P 500 (SPY ETF)": "SPY",
+    "Nasdaq 100 (QQQ)": "QQQ",
+    "Or (Gold)": "GLD"
+}
+
+assets_crypto = {
+    "Bitcoin": "bitcoin",
+    "Ethereum": "ethereum"
+}
 
 # ---------- FONCTIONS ----------
 
 @st.cache_data(ttl=3600)
-def get_polygon_data(ticker):
-    try:
-        end_date = datetime.today()
-        start_date = end_date - timedelta(days=90)  # 3 mois
-
-        aggs = client.get_aggs(
-            ticker, 1, "day", start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d")
-        )
-        data = pd.DataFrame(aggs)
-        if not data.empty:
-            data["date"] = pd.to_datetime(data["timestamp"], unit="ms")
-            data.sort_values("date", inplace=True)
-            return data
-        else:
-            return None
-    except Exception as e:
-        st.warning(f"Erreur pour {ticker} : {e}")
+def get_yfinance_data(ticker):
+    end_date = datetime.today()
+    start_date = end_date - timedelta(days=90)
+    df = yf.download(ticker, start=start_date, end=end_date)
+    if not df.empty:
+        return df
+    else:
         return None
 
-def analyze_data(df):
-    close_price = df["close"].iloc[-1]
-    ma50 = df["close"].rolling(window=50).mean().iloc[-1]
-    ma200 = df["close"].rolling(window=200).mean().iloc[-1] if len(df) >= 200 else np.nan
+@st.cache_data(ttl=3600)
+def get_crypto_price(coin):
+    url = f"https://api.coingecko.com/api/v3/coins/{coin}/market_chart"
+    params = {"vs_currency": "usd", "days": "90"}
+    response = requests.get(url, params=params)
+    if response.status_code == 200:
+        prices = response.json()["prices"]
+        df = pd.DataFrame(prices, columns=["timestamp", "price"])
+        df["date"] = pd.to_datetime(df["timestamp"], unit="ms")
+        df = df.set_index("date")
+        df = df.resample('1D').last().dropna()
+        return df
+    else:
+        return None
 
-    trend = "Haussière" if close_price > ma200 else "Baissière"
+def analyze_data(df, price_col="Close"):
+    if price_col == "Close":
+        close_price = df[price_col].iloc[-1]
+        series = df[price_col]
+    else:
+        close_price = df[price_col].iloc[-1]
+        series = df[price_col]
+
+    ma50 = series.rolling(window=50).mean().iloc[-1]
+    ma200 = series.rolling(window=200).mean().iloc[-1] if len(series) >= 200 else np.nan
+
+    trend = "Haussière ✅" if close_price > ma200 else "Baissière ❌"
     cross = "Golden Cross ✅" if ma50 > ma200 else "Death Cross ❌"
 
-    perf = (close_price / df["close"].iloc[-21] - 1) * 100 if len(df) > 21 else np.nan
-    action = "Renforcer" if trend == "Haussière" else "Attendre"
+    if len(series) > 21:
+        perf = (close_price / series.iloc[-22] - 1) * 100
+    else:
+        perf = np.nan
 
-    last_date = df["date"].max().strftime("%Y-%m-%d")
-    return close_price, trend, cross, perf, action, last_date
+    action = "Renforcer 🟢" if trend.startswith("Haussière") else "Attendre ⚪️"
 
-# ---------- LISTE DES ACTIFS ----------
-assets = {
-    "Bitcoin": "X:BTCUSD",
-    "S&P 500 (SPY ETF)": "X:SPY",
-    "Nasdaq 100": "X:QQQ",
-    "Or": "X:GCUSD",
-    "Ethereum": "X:ETHUSD"
-}
+    return close_price, trend, cross, f"{perf:.2f} %", action
 
 # ---------- TITRE ----------
 st.title("📊 Tableau de bord Tendance & Valorisation")
 
-# ---------- BOUTONS ----------
 col1, col2 = st.columns(2)
 with col1:
     force_update = st.button("🔄 Forcer la mise à jour des données")
@@ -72,52 +86,53 @@ with col2:
 if force_update:
     st.cache_data.clear()
 
-# ---------- AFFICHAGE MODE ----------
 mode = st.radio("Affichage :", ["Tableau (PC)", "Cartes (Mobile)"])
 
-# ---------- TRAITEMENT DES DONNÉES ----------
-results = []
-dates = {}
+# ---------- ANALYSE ----------
+results = {}
 
-for name, ticker in assets.items():
-    df = get_polygon_data(ticker)
-
-    if df is not None:
-        if not df.empty:
-            close, trend, cross, perf, action, last_date = analyze_data(df)
-            results.append({
-                "Actif": name,
-                "Prix actuel": f"{close:,.2f}",
-                "Tendance": trend,
-                "Croisement MA50/MA200": cross,
-                "Évolution 1 mois": f"{perf:.2f} %",
-                "Action suggérée": action
-            })
-            dates[name] = last_date
-        else:
-            results.append({
-                "Actif": name,
-                "Prix actuel": "Erreur",
-                "Tendance": "Erreur",
-                "Croisement MA50/MA200": "Erreur",
-                "Évolution 1 mois": "Erreur",
-                "Action suggérée": "Erreur"
-            })
-            dates[name] = "Données vides"
+# 📈 YFinance assets
+for name, ticker in assets_yfinance.items():
+    df = get_yfinance_data(ticker)
+    if df is not None and not df.empty:
+        close, trend, cross, perf, action = analyze_data(df)
+        last_date = df.index[-1].strftime("%Y-%m-%d")
     else:
-        results.append({
-            "Actif": name,
-            "Prix actuel": "Erreur",
-            "Tendance": "Erreur",
-            "Croisement MA50/MA200": "Erreur",
-            "Évolution 1 mois": "Erreur",
-            "Action suggérée": "Erreur"
-        })
-        dates[name] = "Erreur de récupération"
+        close, trend, cross, perf, action, last_date = "Erreur", "Erreur", "Erreur", "Erreur", "Erreur", "N/A"
 
-df_result = pd.DataFrame(results)
+    results[name] = {
+        "Prix actuel": close,
+        "Tendance": trend,
+        "Croisement": cross,
+        "Évolution 1 mois": perf,
+        "Action": action,
+        "Dernière date": last_date
+    }
+
+# 📊 Crypto assets
+for name, coin in assets_crypto.items():
+    df = get_crypto_price(coin)
+    if df is not None and not df.empty:
+        df = df.rename(columns={"price": "Close"})
+        close, trend, cross, perf, action = analyze_data(df, price_col="Close")
+        last_date = df.index[-1].strftime("%Y-%m-%d")
+    else:
+        close, trend, cross, perf, action, last_date = "Erreur", "Erreur", "Erreur", "Erreur", "Erreur", "N/A"
+
+    results[name] = {
+        "Prix actuel": close,
+        "Tendance": trend,
+        "Croisement": cross,
+        "Évolution 1 mois": perf,
+        "Action": action,
+        "Dernière date": last_date
+    }
 
 # ---------- AFFICHAGE ----------
+df_result = pd.DataFrame.from_dict(results, orient='index')
+df_result.reset_index(inplace=True)
+df_result.rename(columns={"index": "Actif"}, inplace=True)
+
 st.subheader("📋 Données actuelles")
 
 if mode == "Tableau (PC)":
@@ -129,18 +144,13 @@ else:
             ### {row['Actif']}
             **Prix actuel** : {row['Prix actuel']}  
             **Tendance** : {row['Tendance']}  
-            **Croisement** : {row['Croisement MA50/MA200']}  
+            **Croisement** : {row['Croisement']}  
             **Évolution 1 mois** : {row['Évolution 1 mois']}  
-            **Action suggérée** : {row['Action suggérée']}
+            **Action** : {row['Action']}  
+            **Dernière date** : {row['Dernière date']}
             ---
             """
         )
 
-# ---------- DATES DES DONNÉES ----------
-st.markdown("🕒 **Données les plus récentes par actif :**")
-for asset, date in dates.items():
-    st.write(f"- {asset} : {date}")
-
-# ---------- FOOTER ----------
 st.markdown("---")
-st.markdown("Développé par redleader1967 🚀")
+st.markdown("Développé par **redleader1967 🚀**")
