@@ -1,142 +1,95 @@
-import pandas as pd
-import requests
-import warnings
 import streamlit as st
+import pandas as pd
+from polygon import RESTClient
+import datetime
 
-warnings.filterwarnings("ignore")
-
-# ====== CONFIGURATION ======
-API_KEY = "JQr2NKnwqbdeXfmWCe58mva2BC8pKIf0"
-
-assets = {
-    'Bitcoin': 'X:BTCUSD',
-    'S&P 500 (SPY ETF)': 'SPY',
-    'Nasdaq 100': 'I:NDX',
-    'Or': 'XAUUSD',
-    'Ethereum': 'X:ETHUSD'
-}
-
-def get_fear_and_greed():
-    try:
-        url = "https://api.alternative.me/fng/?limit=1&format=json"
-        response = requests.get(url)
-        if response.status_code == 200:
-            data = response.json()
-            return int(data['data'][0]['value'])
-    except:
-        pass
-    return "Indisponible"
-
-@st.cache_data(ttl=3600)
-def get_polygon_data(ticker):
-    if ticker == 'XAUUSD':
-        return get_gold_price()
-    url = f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/1/day/2023-04-01/2025-05-01?adjusted=true&sort=asc&apiKey={API_KEY}"
-    response = requests.get(url)
-    if response.status_code == 200:
-        data = response.json()
-        if 'results' in data:
-            df = pd.DataFrame(data['results'])
-            df['t'] = pd.to_datetime(df['t'], unit='ms')
-            df.set_index('t', inplace=True)
-            df.rename(columns={'o': 'Open', 'h': 'High', 'l': 'Low', 'c': 'Close'}, inplace=True)
-            return df
-    return pd.DataFrame()
-
-def get_gold_price():
-    url = "https://api.coingecko.com/api/v3/simple/price?ids=tether-gold&vs_currencies=usd"
-    response = requests.get(url)
-    if response.status_code == 200:
-        price = response.json()['tether-gold']['usd']
-        df = pd.DataFrame({'Close': [price]*300})
-        df.index = pd.date_range(end=pd.Timestamp.today(), periods=300)
-        return df
-    return pd.DataFrame()
-
+# 🎯 CONFIGURATION
+st.set_page_config(page_title="Tendance & Valorisation", page_icon="📊", layout="wide")
 st.title("📊 Tableau de bord Tendance & Valorisation")
 
-fear_and_greed = get_fear_and_greed()
+# 🔑 API Key
+API_KEY = st.secrets["polygon_api_key"]
 
-results = []
-haussiers = 0
+# 🕒 Dates
+end_date = datetime.date.today()
+start_date = end_date - datetime.timedelta(days=365)
 
-for name, ticker in assets.items():
-    df = get_polygon_data(ticker)
+# 🔎 Tickers
+tickers = {
+    "Bitcoin": "X:BTCUSD",
+    "S&P 500 (SPY ETF)": "SPY",
+    "Nasdaq 100": "QQQ",
+    "Or": "X:GCUSD",
+    "Ethereum": "X:ETHUSD"
+}
 
+# 🎯 FONCTION DATA
+@st.cache_data(ttl=3600)
+def get_polygon_data(ticker):
+    client = RESTClient(API_KEY)
+    aggs = client.get_aggs(ticker, 1, "day", start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
+    df = pd.DataFrame([a.__dict__ for a in aggs])
     if df.empty:
-        st.warning(f"Aucune donnée pour {name} ({ticker}) ➔ ignoré.")
+        return None
+    df['date'] = pd.to_datetime(df['timestamp'], unit='ms')
+    df.set_index('date', inplace=True)
+    return df
+
+# 🔁 Rafraîchissement manuel
+if st.button("🔄 Actualiser les données"):
+    st.cache_data.clear()
+
+# 📊 Données
+rows = []
+
+for name, ticker in tickers.items():
+    df = get_polygon_data(ticker)
+    if df is None or len(df) < 50:
         continue
 
-    df['MA200'] = df['Close'].rolling(window=200).mean()
-    df['MA50'] = df['Close'].rolling(window=50).mean()
+    price = df['close'].iloc[-1]
+    ma50 = df['close'].rolling(50).mean().iloc[-1]
+    ma200 = df['close'].rolling(200).mean().iloc[-1]
+    tendance = "Haussière" if price > ma200 else "Baissière"
+    croisement = "Golden Cross ✅" if ma50 > ma200 else "Death Cross ❌"
+    pct_change = ((price / df['close'].iloc[-21]) - 1) * 100 if len(df) > 21 else 0
 
-    close_now = df['Close'].iloc[-1]
-    ma200_now = df['MA200'].iloc[-1]
-    ma50_now = df['MA50'].iloc[-1]
-    date_now = df.index[-1].strftime("%Y-%m-%d")
+    action = "Renforcer" if tendance == "Haussière" and ma50 > ma200 else "Attendre"
 
-    df_1mo = df[df.index <= (df.index[-1] - pd.Timedelta(days=30))]
-    close_month = df_1mo['Close'].iloc[-1] if not df_1mo.empty else None
-
-    tendance_bool = close_now > ma200_now if pd.notna(ma200_now) else False
-    trend = 'Haussière ✅' if tendance_bool else 'Baissière ❌'
-    if tendance_bool:
-        haussiers += 1
-
-    cross = 'Golden Cross ✅' if ma50_now > ma200_now else 'Death Cross ❌'
-
-    if close_month:
-        evolution_pct = round((close_now - close_month) / close_month * 100, 2)
-        change = f"+{evolution_pct}% 📈" if evolution_pct > 0 else f"{evolution_pct}% 📉"
-    else:
-        change = "Pas de données"
-
-    recommandation = "Renforcer 🟢" if tendance_bool and close_month and evolution_pct > 0 else "Attendre ⚪"
-
-    if name == 'Bitcoin' and isinstance(fear_and_greed, int):
-        if fear_and_greed > 75:
-            recommandation = "Marché trop euphorique ⚠️"
-
-    results.append({
-        'Actif': name,
-        'Prix actuel': round(close_now, 2),
-        'Tendance': trend,
-        'Croisement MA50/MA200': cross,
-        'Évolution 1 mois': change,
-        'Action suggérée': recommandation,
-        'Date des données': date_now
+    rows.append({
+        "Actif": name,
+        "Prix actuel": f"{price:,.2f}",
+        "Tendance": tendance + (" ✅" if tendance == "Haussière" else " ❌"),
+        "Croisement MA50/MA200": croisement,
+        "Évolution 1 mois": f"{pct_change:+.2f} %",
+        "Action suggérée": action
     })
 
-df_results = pd.DataFrame(results)
+# 📋 DataFrame
+df_result = pd.DataFrame(rows)
 
-# ===== Affichage =====
+# ✅ AFFICHAGE
+mode = st.radio("Affichage :", ["Tableau (PC)", "Cartes (Mobile)"])
 
-st.markdown("## 🔍 Affichage")
-mode = st.radio("Choisis ton mode d'affichage :", ["Tableau classique (PC)", "Cartes (Mobile)"])
-
-if mode == "Tableau classique (PC)":
-    st.dataframe(df_results, use_container_width=True)
+if df_result.empty:
+    st.error("Aucune donnée disponible.")
 else:
-    for index, row in df_results.iterrows():
-        st.markdown("---")
-        st.markdown(f"### {row['Actif']}")
-        st.markdown(f"**Prix actuel** : {row['Prix actuel']}")
-        st.markdown(f"**Tendance** : {row['Tendance']}")
-        st.markdown(f"**Croisement** : {row['Croisement MA50/MA200']}")
-        st.markdown(f"**Évolution 1 mois** : {row['Évolution 1 mois']}")
-        st.markdown(f"**Action suggérée** : {row['Action suggérée']}")
-        st.markdown(f"*Date des données* : {row['Date des données']}")
+    if mode == "Tableau (PC)":
+        st.dataframe(df_result, use_container_width=True)
+    else:
+        for _, row in df_result.iterrows():
+            with st.container():
+                st.markdown(f"**{row['Actif']}**")
+                st.write(f"Prix actuel : {row['Prix actuel']}")
+                st.write(f"Tendance : {row['Tendance']}")
+                st.write(f"Croisement MA50/MA200 : {row['Croisement MA50/MA200']}")
+                st.write(f"Évolution 1 mois : {row['Évolution 1 mois']}")
+                st.write(f"Action suggérée : {row['Action suggérée']}")
+                st.markdown("---")
 
-# ===== Résumé =====
+# 🔗 PARTAGE
+st.markdown("---")
+st.markdown("🔗 **Partager cette app :** [Copier le lien](https://rrf7vw6hqpsey3wjl.streamlit.app/)")
 
-st.markdown(f"**Fear & Greed Index (Bitcoin)** : {fear_and_greed}/100")
-st.markdown(f"**Actifs en tendance haussière** : {haussiers} sur {len(assets)}")
-
-if haussiers >= len(assets) / 2:
-    st.success("✅ Marché globalement favorable.")
-else:
-    st.error("❌ Marché prudent ou défavorable.")
-
-st.caption("* Golden Cross : MA50 > MA200 (signal haussier)")
-st.caption("* Death Cross : MA50 < MA200 (signal baissier)")
-st.caption("Développé par redleader1967 👑")
+# 👨‍💻 Signature
+st.markdown("<p style='text-align: center;'>Développé par redleader1967 🚀</p>", unsafe_allow_html=True)
