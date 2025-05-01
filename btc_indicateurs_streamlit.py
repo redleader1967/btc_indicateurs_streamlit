@@ -10,7 +10,7 @@ st.title("📊 Tableau de bord Tendance & Valorisation")
 # 🔄 Bouton pour forcer la mise à jour
 if st.button("🔄 Forcer la mise à jour des données"):
     st.cache_data.clear()
-    st.experimental_rerun()
+    st.rerun()
 
 # 🔑 API Key
 API_KEY = st.secrets["polygon_api_key"]
