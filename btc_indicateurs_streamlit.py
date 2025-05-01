@@ -51,7 +51,13 @@ for name, ticker in tickers.items():
     df = get_polygon_data(ticker)
     if df is None or len(df) < 50:
         continue
-
+        
+# Vérifier la date des données récupérées
+if not df.empty:
+    st.write(f"🕒 Dernière date récupérée pour {name} : {df.index[-1].strftime('%Y-%m-%d')}")
+else:
+    st.write(f"⚠ Aucune donnée récupérée pour {name}")
+    
     price = df['close'].iloc[-1]
     ma50 = df['close'].rolling(50).mean().iloc[-1]
     ma200 = df['close'].rolling(200).mean().iloc[-1]
