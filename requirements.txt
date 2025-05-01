@@ -1,3 +1,5 @@
 streamlit
-polygon-api-client
 pandas
+numpy
+yfinance
+requests
