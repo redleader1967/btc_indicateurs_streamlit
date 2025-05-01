@@ -1,25 +1,16 @@
 import streamlit as st
 import pandas as pd
 from polygon import RESTClient
-import datetime
+from datetime import datetime, timedelta
+import pytz
 
-# 🎯 CONFIGURATION
-st.set_page_config(page_title="Tendance & Valorisation", page_icon="📊", layout="wide")
-st.title("📊 Tableau de bord Tendance & Valorisation")
+st.set_page_config(page_title="Tableau de bord Tendance & Valorisation", layout="centered")
 
-# 🔄 Bouton pour forcer la mise à jour
-if st.button("🔄 Forcer la mise à jour des données"):
-    st.cache_data.clear()
-    st.rerun()
-
-# 🔑 API Key
+# 🔑 Clé API
 API_KEY = st.secrets["polygon_api_key"]
+client = RESTClient(API_KEY)
 
-# 🕒 Dates
-end_date = datetime.date.today()
-start_date = end_date - datetime.timedelta(days=365)
-
-# 🔎 Tickers
+# 🎯 Actifs à suivre
 tickers = {
     "Bitcoin": "X:BTCUSD",
     "S&P 500 (SPY ETF)": "SPY",
@@ -28,79 +19,85 @@ tickers = {
     "Ethereum": "X:ETHUSD"
 }
 
-# 🎯 FONCTION DATA
+# 📅 Dates
+end_date = datetime.now(pytz.UTC)
+start_date = end_date - timedelta(days=365 * 1.5)
+
+# 📥 Fonction pour récupérer les données Polygon
 @st.cache_data(ttl=3600)
 def get_polygon_data(ticker):
-    client = RESTClient(API_KEY)
-    aggs = client.get_aggs(ticker, 1, "day", start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
-    df = pd.DataFrame([a.__dict__ for a in aggs])
-    if df.empty:
-        return None
-    df['date'] = pd.to_datetime(df['timestamp'], unit='ms')
-    df.set_index('date', inplace=True)
+    aggs = client.get_aggs(
+        ticker,
+        1,
+        "day",
+        start_date.strftime("%Y-%m-%d"),
+        end_date.strftime("%Y-%m-%d")
+    )
+    data = [{
+        "date": datetime.utcfromtimestamp(a.timestamp / 1000),
+        "close": a.close
+    } for a in aggs]
+    df = pd.DataFrame(data).set_index("date")
     return df
 
-# 🔁 Rafraîchissement manuel
-if st.button("🔄 Actualiser les données"):
+# 📝 Fonction pour calculer la tendance et les indicateurs
+def analyze_asset(name, ticker):
+    try:
+        df = get_polygon_data(ticker)
+        if df.empty:
+            return {"Actif": name, "Prix actuel": "N/A", "Tendance": "N/A", "Date": "Aucune donnée"}
+        ma50 = df["close"].rolling(50).mean()
+        ma200 = df["close"].rolling(200).mean()
+        last_close = df["close"].iloc[-1]
+        last_date = df.index[-1].strftime("%Y-%m-%d")
+
+        tendance = "Haussière ✅" if last_close > ma200.iloc[-1] else "Baissière ❌"
+        cross = "Golden Cross ✅" if ma50.iloc[-1] > ma200.iloc[-1] else "Death Cross ❌"
+
+        try:
+            change = ((df["close"].iloc[-1] - df["close"].iloc[-21]) / df["close"].iloc[-21]) * 100
+        except IndexError:
+            change = 0
+
+        action = "Renforcer 🟢" if tendance.startswith("Haussière") else "Attendre ⚪"
+
+        return {
+            "Actif": name,
+            "Prix actuel": f"{last_close:,.2f}",
+            "Tendance": tendance,
+            "Croisement MA50/MA200": cross,
+            "Évolution 1 mois": f"{change:.2f} %",
+            "Action suggérée": action,
+            "Date": last_date
+        }
+
+    except Exception as e:
+        return {"Actif": name, "Prix actuel": "Erreur", "Tendance": "Erreur", "Date": str(e)}
+
+# 🏷️ Interface Streamlit
+st.title("📊 Tableau de bord Tendance & Valorisation")
+
+if st.button("🔄 Forcer la mise à jour des données"):
     st.cache_data.clear()
 
-# 📊 Données
-rows = []
+if st.button("🔃 Actualiser les données"):
+    pass  # Rafraîchit simplement
 
+# 📊 Analyse
+results = []
 for name, ticker in tickers.items():
-    df = get_polygon_data(ticker)
-    if df is None or len(df) < 50:
-        continue
-        
-# Vérifier la date des données récupérées
-if not df.empty:
-    st.write(f"🕒 Dernière date récupérée pour {name} : {df.index[-1].strftime('%Y-%m-%d')}")
+    results.append(analyze_asset(name, ticker))
+
+df_results = pd.DataFrame(results)
+
+# 🖥️ Affichage
+if not df_results.empty and df_results["Prix actuel"].ne("N/A").any():
+    st.dataframe(df_results, use_container_width=True)
+    st.write(f"🕒 Données les plus récentes par actif :")
+    for idx, row in df_results.iterrows():
+        st.write(f"- **{row['Actif']}** : {row['Date']}")
 else:
-    st.write(f"⚠ Aucune donnée récupérée pour {name}")
-    
-    price = df['close'].iloc[-1]
-    ma50 = df['close'].rolling(50).mean().iloc[-1]
-    ma200 = df['close'].rolling(200).mean().iloc[-1]
-    tendance = "Haussière" if price > ma200 else "Baissière"
-    croisement = "Golden Cross ✅" if ma50 > ma200 else "Death Cross ❌"
-    pct_change = ((price / df['close'].iloc[-21]) - 1) * 100 if len(df) > 21 else 0
-
-    action = "Renforcer" if tendance == "Haussière" and ma50 > ma200 else "Attendre"
-
-    rows.append({
-        "Actif": name,
-        "Prix actuel": f"{price:,.2f}",
-        "Tendance": tendance + (" ✅" if tendance == "Haussière" else " ❌"),
-        "Croisement MA50/MA200": croisement,
-        "Évolution 1 mois": f"{pct_change:+.2f} %",
-        "Action suggérée": action
-    })
-
-# 📋 DataFrame
-df_result = pd.DataFrame(rows)
-
-# ✅ AFFICHAGE
-mode = st.radio("Affichage :", ["Tableau (PC)", "Cartes (Mobile)"])
-
-if df_result.empty:
     st.error("Aucune donnée disponible.")
-else:
-    if mode == "Tableau (PC)":
-        st.dataframe(df_result, use_container_width=True)
-    else:
-        for _, row in df_result.iterrows():
-            with st.container():
-                st.markdown(f"**{row['Actif']}**")
-                st.write(f"Prix actuel : {row['Prix actuel']}")
-                st.write(f"Tendance : {row['Tendance']}")
-                st.write(f"Croisement MA50/MA200 : {row['Croisement MA50/MA200']}")
-                st.write(f"Évolution 1 mois : {row['Évolution 1 mois']}")
-                st.write(f"Action suggérée : {row['Action suggérée']}")
-                st.markdown("---")
 
-# 🔗 PARTAGE
 st.markdown("---")
-st.markdown("🔗 **Partager cette app :** [Copier le lien](https://rrf7vw6hqpsey3wjl.streamlit.app/)")
-
-# 👨‍💻 Signature
-st.markdown("<p style='text-align: center;'>Développé par redleader1967 🚀</p>", unsafe_allow_html=True)
+st.markdown("Développé par redleader1967 🚀")
