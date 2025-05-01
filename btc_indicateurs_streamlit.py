@@ -62,7 +62,7 @@ results = []
 max_date = datetime(2000,1,1)
 
 for name, ticker in assets.items():
-    df, error = get_polygon_data(ticker)
+    df = get_polygon_data(ticker)
     if not df.empty:
         close, trend, cross, perf, action = analyze_data(df)
         last_date = df['date'].max()
